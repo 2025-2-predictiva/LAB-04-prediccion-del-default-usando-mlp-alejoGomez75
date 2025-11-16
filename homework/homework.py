@@ -1,98 +1,172 @@
-# flake8: noqa: E501
-#
-# En este dataset se desea pronosticar el default (pago) del cliente el próximo
-# mes a partir de 23 variables explicativas.
-#
-#   LIMIT_BAL: Monto del credito otorgado. Incluye el credito individual y el
-#              credito familiar (suplementario).
-#         SEX: Genero (1=male; 2=female).
-#   EDUCATION: Educacion (0=N/A; 1=graduate school; 2=university; 3=high school; 4=others).
-#    MARRIAGE: Estado civil (0=N/A; 1=married; 2=single; 3=others).
-#         AGE: Edad (years).
-#       PAY_0: Historia de pagos pasados. Estado del pago en septiembre, 2005.
-#       PAY_2: Historia de pagos pasados. Estado del pago en agosto, 2005.
-#       PAY_3: Historia de pagos pasados. Estado del pago en julio, 2005.
-#       PAY_4: Historia de pagos pasados. Estado del pago en junio, 2005.
-#       PAY_5: Historia de pagos pasados. Estado del pago en mayo, 2005.
-#       PAY_6: Historia de pagos pasados. Estado del pago en abril, 2005.
-#   BILL_AMT1: Historia de pagos pasados. Monto a pagar en septiembre, 2005.
-#   BILL_AMT2: Historia de pagos pasados. Monto a pagar en agosto, 2005.
-#   BILL_AMT3: Historia de pagos pasados. Monto a pagar en julio, 2005.
-#   BILL_AMT4: Historia de pagos pasados. Monto a pagar en junio, 2005.
-#   BILL_AMT5: Historia de pagos pasados. Monto a pagar en mayo, 2005.
-#   BILL_AMT6: Historia de pagos pasados. Monto a pagar en abril, 2005.
-#    PAY_AMT1: Historia de pagos pasados. Monto pagado en septiembre, 2005.
-#    PAY_AMT2: Historia de pagos pasados. Monto pagado en agosto, 2005.
-#    PAY_AMT3: Historia de pagos pasados. Monto pagado en julio, 2005.
-#    PAY_AMT4: Historia de pagos pasados. Monto pagado en junio, 2005.
-#    PAY_AMT5: Historia de pagos pasados. Monto pagado en mayo, 2005.
-#    PAY_AMT6: Historia de pagos pasados. Monto pagado en abril, 2005.
-#
-# La variable "default payment next month" corresponde a la variable objetivo.
-#
-# El dataset ya se encuentra dividido en conjuntos de entrenamiento y prueba
-# en la carpeta "files/input/".
-#
-# Los pasos que debe seguir para la construcción de un modelo de
-# clasificación están descritos a continuación.
-#
-#
-# Paso 1.
-# Realice la limpieza de los datasets:
-# - Renombre la columna "default payment next month" a "default".
-# - Remueva la columna "ID".
-# - Elimine los registros con informacion no disponible.
-# - Para la columna EDUCATION, valores > 4 indican niveles superiores
-#   de educación, agrupe estos valores en la categoría "others".
-# - Renombre la columna "default payment next month" a "default"
-# - Remueva la columna "ID".
-#
-#
-# Paso 2.
-# Divida los datasets en x_train, y_train, x_test, y_test.
-#
-#
-# Paso 3.
-# Cree un pipeline para el modelo de clasificación. Este pipeline debe
-# contener las siguientes capas:
-# - Transforma las variables categoricas usando el método
-#   one-hot-encoding.
-# - Descompone la matriz de entrada usando componentes principales.
-#   El pca usa todas las componentes.
-# - Escala la matriz de entrada al intervalo [0, 1].
-# - Selecciona las K columnas mas relevantes de la matrix de entrada.
-# - Ajusta una red neuronal tipo MLP.
-#
-#
-# Paso 4.
-# Optimice los hiperparametros del pipeline usando validación cruzada.
-# Use 10 splits para la validación cruzada. Use la función de precision
-# balanceada para medir la precisión del modelo.
-#
-#
-# Paso 5.
-# Guarde el modelo (comprimido con gzip) como "files/models/model.pkl.gz".
-# Recuerde que es posible guardar el modelo comprimido usanzo la libreria gzip.
-#
-#
-# Paso 6.
-# Calcule las metricas de precision, precision balanceada, recall,
-# y f1-score para los conjuntos de entrenamiento y prueba.
-# Guardelas en el archivo files/output/metrics.json. Cada fila
-# del archivo es un diccionario con las metricas de un modelo.
-# Este diccionario tiene un campo para indicar si es el conjunto
-# de entrenamiento o prueba. Por ejemplo:
-#
-# {'dataset': 'train', 'precision': 0.8, 'balanced_accuracy': 0.7, 'recall': 0.9, 'f1_score': 0.85}
-# {'dataset': 'test', 'precision': 0.7, 'balanced_accuracy': 0.6, 'recall': 0.8, 'f1_score': 0.75}
-#
-#
-# Paso 7.
-# Calcule las matrices de confusion para los conjuntos de entrenamiento y
-# prueba. Guardelas en el archivo files/output/metrics.json. Cada fila
-# del archivo es un diccionario con las metricas de un modelo.
-# de entrenamiento o prueba. Por ejemplo:
-#
-# {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
-# {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
-#
+import os
+import json
+import gzip
+import pickle
+from glob import glob
+from pathlib import Path
+from typing import Dict, List
+
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import PCA
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+)
+from sklearn.model_selection import GridSearchCV
+from sklearn.neural_network import MLPClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+# ===================== CARGA Y PREPARACIÓN DE DATOS ===================== #
+
+def cargar_y_preparar(ruta_zip: str) -> pd.DataFrame:
+    """
+    Lee el .csv.zip, ajusta columnas clave y aplica filtros básicos.
+    """
+    df = pd.read_csv(ruta_zip, compression="zip").copy()
+
+    # Homogeneizar nombre de la variable respuesta
+    df.rename(columns={"default payment next month": "default"}, inplace=True)
+
+    # ID no aporta información para el modelo
+    if "ID" in df.columns:
+        df.drop(columns=["ID"], inplace=True)
+
+    # Se descartan filas con categorías 0 en estas variables
+    df = df[(df["MARRIAGE"] != 0) & (df["EDUCATION"] != 0)].copy()
+
+    # Agrupar niveles altos de EDUCATION en un solo valor
+    df["EDUCATION"] = df["EDUCATION"].apply(lambda v: 4 if v >= 4 else v)
+
+    # Se eliminan registros incompletos
+    return df.dropna()
+
+
+# ===================== MÉTRICAS Y MATRICES ===================== #
+
+def resumen_metricas(etiqueta: str, y_true, y_pred) -> Dict:
+    """
+    Construye un diccionario con las métricas más usadas.
+    """
+    return {
+        "type": "metrics",
+        "dataset": etiqueta,
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
+        "f1_score": f1_score(y_true, y_pred, zero_division=0),
+    }
+
+
+def matriz_confusion_dict(etiqueta: str, y_true, y_pred) -> Dict:
+    """
+    Convierte la matriz de confusión en un formato más amigable para guardar.
+    """
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    return {
+        "type": "cm_matrix",
+        "dataset": etiqueta,
+        "true_0": {"predicted_0": int(tn), "predicted_1": int(fp)},
+        "true_1": {"predicted_0": int(fn), "predicted_1": int(tp)},
+    }
+
+
+# ===================== PIPELINE Y GRIDSEARCH ===================== #
+
+def crear_busqueda(vars_cat, vars_num) -> GridSearchCV:
+    """
+    Arma el pipeline completo (prepro + selección + PCA + MLP)
+    y define el espacio de búsqueda para GridSearchCV.
+    """
+    transformador = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(), vars_cat),
+            ("num", StandardScaler(), vars_num),
+        ]
+    )
+
+    pipeline_mlp = Pipeline(
+        steps=[
+            ("pre", transformador),
+            ("selector", SelectKBest(score_func=f_classif)),
+            ("pca", PCA()),
+            ("mlp", MLPClassifier(max_iter=15000, random_state=21)),
+        ]
+    )
+
+    # Configuración de hiperparámetros ya acotada a una región “buena”
+    grid = {
+        "selector__k": [20],
+        "pca__n_components": [None],
+        "mlp__hidden_layer_sizes": [(50, 30, 40, 60)],
+        "mlp__alpha": [0.26],
+        "mlp__learning_rate_init": [0.001],
+    }
+
+    return GridSearchCV(
+        estimator=pipeline_mlp,
+        param_grid=grid,
+        cv=10,
+        scoring="balanced_accuracy",
+        n_jobs=-1,
+        refit=True,
+    )
+
+
+# ===================== PUNTO DE ENTRADA ===================== #
+
+def main() -> None:
+    ruta_train = "files/input/train_data.csv.zip"
+    ruta_test = "files/input/test_data.csv.zip"
+
+    df_tr = cargar_y_preparar(ruta_train)
+    df_te = cargar_y_preparar(ruta_test)
+
+    X_tr, y_tr = df_tr.drop(columns=["default"]), df_tr["default"]
+    X_te, y_te = df_te.drop(columns=["default"]), df_te["default"]
+
+    columnas_cat = ["SEX", "EDUCATION", "MARRIAGE"]
+    columnas_num = [c for c in X_tr.columns if c not in columnas_cat]
+
+    buscador = crear_busqueda(columnas_cat, columnas_num)
+    buscador.fit(X_tr, y_tr)
+
+    modelos_dir = Path("files/models")
+    if modelos_dir.exists():
+        # Limpio cualquier modelo previo para dejar solo el actual
+        for ruta in glob(str(modelos_dir / "*")):
+            os.remove(ruta)
+        try:
+            os.rmdir(modelos_dir)
+        except OSError:
+            # Si la carpeta no se puede borrar (por algo residual), se ignora
+            pass
+    modelos_dir.mkdir(parents=True, exist_ok=True)
+
+    with gzip.open(modelos_dir / "model.pkl.gz", "wb") as fh:
+        pickle.dump(buscador, fh)
+
+    y_tr_pred = buscador.predict(X_tr)
+    y_te_pred = buscador.predict(X_te)
+
+    m_train = resumen_metricas("train", y_tr, y_tr_pred)
+    m_test = resumen_metricas("test", y_te, y_te_pred)
+    cm_train = matriz_confusion_dict("train", y_tr, y_tr_pred)
+    cm_test = matriz_confusion_dict("test", y_te, y_te_pred)
+
+    resultados: List[Dict] = [m_train, m_test, cm_train, cm_test]
+
+    out_dir = Path("files/output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "metrics.json", "w", encoding="utf-8") as f:
+        for registro in resultados:
+            f.write(json.dumps(registro) + "\n")
+
+
+if __name__ == "__main__":
+    main()
